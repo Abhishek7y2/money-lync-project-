@@ -8,3 +8,14 @@ submission/
 .idea/
 *.iml
 .DS_Store
+*.zip
+temp_*.txt
+Find*.java
+Sum*.java
+LargeAmounts.java
+FILE_AUDIT_AND_CHECKLIST.md
+INTERVIEW_PREP_AND_PROJECT_BLUEPRINT.md
+.vscode/
+data/
+docs/
+incident_note.txt

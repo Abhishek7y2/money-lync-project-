@@ -21,6 +21,13 @@ class AmountsTest {
     }
 
     @Test
+    void readsRupeesWithoutDecimals() {
+        assertEquals(new BigDecimal("5.00"),
+                Amounts.first("Rs.5 debited from a/c **4821 on 04-07-26 at 07:19 "
+                        + "to UPI/WATER CAN. Avl Bal: Rs.92,213.10."));
+    }
+
+    @Test
     void readsInrPrefix() {
         assertEquals(new BigDecimal("333.33"),
                 Amounts.first("Dear Customer, Acct XX9075 is debited with INR 333.33 "

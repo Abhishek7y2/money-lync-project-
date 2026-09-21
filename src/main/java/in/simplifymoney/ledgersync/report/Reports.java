@@ -24,31 +24,49 @@ public final class Reports {
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(2);
 
     public static Map<String, Object> summary(List<NormalizedTxn> ledger) {
-        Map<String, Object> accounts = new LinkedHashMap<>();
-        for (String acct : new TreeSet<>(ledger.stream()
-                .map(NormalizedTxn::accountLast4).toList())) {
+        Map<String, Object> byAccount = new LinkedHashMap<>();
+        List<String> accounts = ledger.stream()
+                .map(NormalizedTxn::accountLast4).distinct().sorted().toList();
 
+        for (String acct : accounts) {
             BigDecimal spend = ZERO;
             BigDecimal income = ZERO;
+            long microCount = 0;
+            BigDecimal microTotal = ZERO;
+            BigDecimal transferredOut = ZERO;
+            BigDecimal transferredIn = ZERO;
+
             for (NormalizedTxn t : ledger) {
                 if (!t.accountLast4().equals(acct)) continue;
-                if (t.direction() == Direction.DEBIT) spend = spend.add(t.amount());
-                else income = income.add(t.amount());
+                
+                switch (t.category()) {
+                    case SPEND -> spend = spend.add(t.amount());
+                    case INCOME -> income = income.add(t.amount());
+                    case MICRO -> {
+                        microCount++;
+                        microTotal = microTotal.add(t.amount());
+                    }
+                    case TRANSFER -> {
+                        if (t.direction() == Direction.DEBIT) {
+                            transferredOut = transferredOut.add(t.amount());
+                        } else {
+                            transferredIn = transferredIn.add(t.amount());
+                        }
+                    }
+                }
             }
 
-            Map<String, Object> a = new LinkedHashMap<>();
-            a.put("spend", spend.toPlainString());
-            a.put("income", income.toPlainString());
-            // TODO micro spends are still counted inside spend, and are not rolled up
-            a.put("micro_count", 0);
-            a.put("micro_total", ZERO.toPlainString());
-            // TODO transfers are still counted as spend and income
-            a.put("transferred_out", ZERO.toPlainString());
-            a.put("transferred_in", ZERO.toPlainString());
-            accounts.put(acct, a);
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("spend", spend.toPlainString());
+            out.put("income", income.toPlainString());
+            out.put("micro_count", microCount);
+            out.put("micro_total", microTotal.toPlainString());
+            out.put("transferred_out", transferredOut.toPlainString());
+            out.put("transferred_in", transferredIn.toPlainString());
+            byAccount.put(acct, out);
         }
         Map<String, Object> doc = new LinkedHashMap<>();
-        doc.put("accounts", accounts);
+        doc.put("accounts", byAccount);
         return doc;
     }
 
@@ -69,8 +87,47 @@ public final class Reports {
         return doc;
     }
 
-    public static Map<String, Object> reconciliation(List<NormalizedTxn> ledger) {
-        throw new UnsupportedOperationException("reconciliation is not implemented");
+    public static Map<String, Object> reconciliation(List<NormalizedTxn> ledger, Map<String, Object> checkpoint) {
+        Map<String, Object> report = new LinkedHashMap<>();
+        
+        @SuppressWarnings("unchecked")
+        Map<String, Map<String, Object>> checkpointAccounts = (Map<String, Map<String, Object>>) checkpoint.get("accounts");
+        
+        for (Map.Entry<String, Map<String, Object>> entry : checkpointAccounts.entrySet()) {
+            String account = entry.getKey();
+            Map<String, Object> check = entry.getValue();
+            
+            BigDecimal opening = new BigDecimal((String) check.get("opening_balance"));
+            BigDecimal expectedClosing = new BigDecimal((String) check.get("closing_balance"));
+            int expectedTxns = (Integer) check.get("transactions_expected");
+            
+            // Calculate actuals from ledger
+            BigDecimal calculatedClosing = opening;
+            int actualTxns = 0;
+            
+            for (NormalizedTxn t : ledger) {
+                if (!t.accountLast4().equals(account)) continue;
+                actualTxns++;
+                if (t.direction() == Direction.CREDIT) {
+                    calculatedClosing = calculatedClosing.add(t.amount());
+                } else if (t.direction() == Direction.DEBIT) {
+                    calculatedClosing = calculatedClosing.subtract(t.amount());
+                }
+            }
+            
+            if (expectedClosing.compareTo(calculatedClosing) != 0 || expectedTxns != actualTxns) {
+                Map<String, Object> discrepancy = new LinkedHashMap<>();
+                discrepancy.put("expected_transactions", expectedTxns);
+                discrepancy.put("actual_transactions", actualTxns);
+                discrepancy.put("expected_closing_balance", expectedClosing.toPlainString());
+                discrepancy.put("calculated_closing_balance", calculatedClosing.toPlainString());
+                BigDecimal diff = expectedClosing.subtract(calculatedClosing).abs();
+                discrepancy.put("balance_difference", diff.toPlainString());
+                report.put(account, discrepancy);
+            }
+        }
+        
+        return report;
     }
 
     public static Map<Category, BigDecimal> byCategory(List<NormalizedTxn> ledger) {

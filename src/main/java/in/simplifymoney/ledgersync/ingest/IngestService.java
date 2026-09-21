@@ -37,18 +37,46 @@ public final class IngestService {
 
     public Stats ingestFile(Path corpus) throws IOException {
         List<RawMessage> messages = readCorpus(corpus);
-        int parsed = 0;
+        List<ParsedTxn> parsedTxns = new ArrayList<>();
         int skipped = 0;
+        
         for (RawMessage m : messages) {
             Optional<ParsedTxn> p = parsers.parse(m);
             if (p.isEmpty()) {
                 skipped++;
                 continue;
             }
-            store.save(toTransaction(p.get()));
-            parsed++;
+            parsedTxns.add(p.get());
         }
-        return new Stats(messages.size(), parsed, skipped);
+
+        // Deduplication
+        DeduplicationEngine dedup = new DeduplicationEngine();
+        List<List<ParsedTxn>> duplicateGroups = dedup.deduplicate(parsedTxns);
+        
+        List<ParsedTxn> uniqueTxns = new ArrayList<>();
+        for (List<ParsedTxn> group : duplicateGroups) {
+            uniqueTxns.add(group.get(0));
+        }
+
+        // Categorize
+        CategorizationEngine catEngine = new CategorizationEngine();
+        Map<ParsedTxn, Category> categories = catEngine.categorize(uniqueTxns);
+
+        List<NormalizedTxn> finalTxns = new ArrayList<>();
+        for (List<ParsedTxn> group : duplicateGroups) {
+            ParsedTxn primary = group.get(0);
+            List<String> msgIds = group.stream().map(ParsedTxn::sourceMessageId).sorted().toList();
+            Category c = categories.get(primary);
+            finalTxns.add(new NormalizedTxn(primary.accountLast4(), primary.occurredAt(), 
+                    primary.direction(), primary.amount(), c, primary.merchant(), msgIds));
+        }
+
+        // Save deduplicated txns
+        for (NormalizedTxn t : finalTxns) {
+            store.save(t);
+        }
+
+        return new Stats(messages.size(), finalTxns.size(), skipped);
     }
 
     public static List<RawMessage> readCorpus(Path corpus) throws IOException {
@@ -66,12 +94,6 @@ public final class IngestService {
             }
         }
         return out;
-    }
-
-    private NormalizedTxn toTransaction(ParsedTxn p) {
-        Category c = p.direction() == Direction.DEBIT ? Category.SPEND : Category.INCOME;
-        return new NormalizedTxn(p.accountLast4(), p.occurredAt(), p.direction(),
-                p.amount(), c, p.merchant(), List.of(p.sourceMessageId()));
     }
 
     public record Stats(int messagesRead, int transactionsWritten, int messagesSkipped) {}
